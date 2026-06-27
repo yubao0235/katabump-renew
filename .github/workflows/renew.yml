@@ -9,30 +9,73 @@ on:
 jobs:
   renew:
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '20'
-        
+
     - name: Install Dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y xvfb
         npm install
         npx playwright install-deps chrome
-      
+
+    - name: Pick Webshare proxy
+      env:
+        WEBSHARE_PROXY_LIST_URL: ${{ secrets.WEBSHARE_PROXY_LIST_URL }}
+      run: |
+        if [ -z "$WEBSHARE_PROXY_LIST_URL" ]; then
+          echo "WEBSHARE_PROXY_LIST_URL is empty, running without Webshare proxy."
+          echo "HTTP_PROXY=" >> "$GITHUB_ENV"
+          echo "HTTPS_PROXY=" >> "$GITHUB_ENV"
+        else
+          echo "Downloading Webshare proxy list..."
+          curl -fsSL "${WEBSHARE_PROXY_LIST_URL}" -o proxies.txt
+          echo "Proxy list downloaded. Total lines: $(wc -l < proxies.txt)"
+
+          PROXY_LINE=$(grep -v '^[[:space:]]*$' proxies.txt | shuf -n 1)
+          echo "Selected Webshare proxy: $(echo "$PROXY_LINE" | cut -d: -f1,2)"
+
+          IP=$(echo "$PROXY_LINE" | cut -d: -f1)
+          PORT=$(echo "$PROXY_LINE" | cut -d: -f2)
+          USER=$(echo "$PROXY_LINE" | cut -d: -f3)
+          PASS=$(echo "$PROXY_LINE" | cut -d: -f4)
+
+          HTTP_PROXY_VALUE="http://${USER}:${PASS}@${IP}:${PORT}"
+
+          echo "HTTP_PROXY=${HTTP_PROXY_VALUE}" >> "$GITHUB_ENV"
+          echo "HTTPS_PROXY=${HTTP_PROXY_VALUE}" >> "$GITHUB_ENV"
+
+          echo "::add-mask::${HTTP_PROXY_VALUE}"
+          echo "::add-mask::${USER}"
+          echo "::add-mask::${PASS}"
+        fi
+
+    - name: Check proxy IP
+      env:
+        HTTP_PROXY: ${{ env.HTTP_PROXY }}
+        HTTPS_PROXY: ${{ env.HTTPS_PROXY }}
+      run: |
+        echo "Direct IP:"
+        curl -s https://api.ipify.org || true
+
+        if [ -n "$HTTP_PROXY" ]; then
+          echo "Proxy IP:"
+          curl -s -x "$HTTP_PROXY" https://api.ipify.org || true
+        fi
+
     - name: Run Renew Script
       env:
-        # 将 USERS_JSON 配置在 GitHub Repository Secrets 中
-        # 格式: [{"username": "xxx", "password": "xxx"}, ...]
         USERS_JSON: ${{ secrets.USERS_JSON }}
-        HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
         TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        HTTP_PROXY: ${{ env.HTTP_PROXY }}
+        HTTPS_PROXY: ${{ env.HTTPS_PROXY }}
       # 使用 xvfb-run 模拟有头环境运行
       run: xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" node action_renew.js
 
