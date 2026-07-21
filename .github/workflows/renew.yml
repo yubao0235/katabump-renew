@@ -3,7 +3,7 @@ name: Katabump Auto Renew
 on:
   schedule:
     # 每天 UTC 0点，北京时间 8点运行
-    - cron: '0 0 * * *'
+    - cron: '20 18,8 * * *'
   workflow_dispatch:
 
 jobs:
@@ -31,8 +31,7 @@ jobs:
         run: |
           if [ -z "$WEBSHARE_PROXY_LIST_URL" ]; then
             echo "WEBSHARE_PROXY_LIST_URL is empty, running without Webshare proxy."
-            echo "HTTP_PROXY=" >> "$GITHUB_ENV"
-            echo "HTTPS_PROXY=" >> "$GITHUB_ENV"
+            touch proxies.txt
             exit 0
           fi
 
@@ -40,49 +39,20 @@ jobs:
           curl -fsSL "${WEBSHARE_PROXY_LIST_URL}" -o proxies.txt
           echo "Proxy list downloaded. Total lines: $(wc -l < proxies.txt)"
 
+          # 选出一个默认的写入环境变量，供不走重试逻辑的地方使用
           PROXY_LINE=$(grep -v '^[[:space:]]*$' proxies.txt | shuf -n 1)
-
-          if [ -z "$PROXY_LINE" ]; then
-            echo "ERROR: No proxy found in Webshare proxy list."
-            exit 1
+          if [ -n "$PROXY_LINE" ]; then
+            IP=$(echo "$PROXY_LINE" | cut -d: -f1)
+            PORT=$(echo "$PROXY_LINE" | cut -d: -f2)
+            PROXY_USER=$(echo "$PROXY_LINE" | cut -d: -f3)
+            PROXY_PASS=$(echo "$PROXY_LINE" | cut -d: -f4)
+            HTTP_PROXY_VALUE="http://${PROXY_USER}:${PROXY_PASS}@${IP}:${PORT}"
+            
+            echo "::add-mask::${HTTP_PROXY_VALUE}"
+            echo "HTTP_PROXY=${HTTP_PROXY_VALUE}" >> "$GITHUB_ENV"
+            echo "HTTPS_PROXY=${HTTP_PROXY_VALUE}" >> "$GITHUB_ENV"
+            echo "Initial Webshare proxy selected: ${IP}:${PORT}"
           fi
-
-          IP=$(echo "$PROXY_LINE" | cut -d: -f1)
-          PORT=$(echo "$PROXY_LINE" | cut -d: -f2)
-          PROXY_USER=$(echo "$PROXY_LINE" | cut -d: -f3)
-          PROXY_PASS=$(echo "$PROXY_LINE" | cut -d: -f4)
-
-          if [ -z "$IP" ] || [ -z "$PORT" ] || [ -z "$PROXY_USER" ] || [ -z "$PROXY_PASS" ]; then
-            echo "ERROR: Proxy line format invalid. Expected IP:PORT:USERNAME:PASSWORD"
-            echo "Selected line is invalid, hidden for security."
-            exit 1
-          fi
-
-          HTTP_PROXY_VALUE="http://${PROXY_USER}:${PROXY_PASS}@${IP}:${PORT}"
-
-          echo "::add-mask::${HTTP_PROXY_VALUE}"
-          echo "::add-mask::${PROXY_USER}"
-          echo "::add-mask::${PROXY_PASS}"
-
-          echo "HTTP_PROXY=${HTTP_PROXY_VALUE}" >> "$GITHUB_ENV"
-          echo "HTTPS_PROXY=${HTTP_PROXY_VALUE}" >> "$GITHUB_ENV"
-
-          echo "Selected Webshare proxy: ${IP}:${PORT}"
-
-      - name: Check proxy IP
-        run: |
-          echo "Direct IP:"
-          curl --noproxy '*' -s https://api.ipify.org || true
-          echo
-
-          if [ -n "$HTTP_PROXY" ]; then
-            echo "Proxy IP:"
-            curl -s -x "$HTTP_PROXY" https://api.ipify.org || true
-            echo
-          else
-            echo "HTTP_PROXY is empty."
-          fi
-
       - name: Run Renew Script
         env:
           USERS_JSON: ${{ secrets.USERS_JSON }}
